@@ -35,19 +35,43 @@ const SbiImageOcr=(()=>{
   const t=String(s||'').trim().replace(/[，]/g,',').replace(/[．]/g,'.').replace(/\s/g,'');
   return /^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,4})?$/.test(t)?t:'';
  }
+ // Retry only unreadable cells with slightly different crop geometry and segmentation.
+ // This handles dropped decimal points, the currency glyph and green negative P&L text.
+ // Do not derive an entry price from P&L or carry a value across unrelated screenshots.
+ function numericPriceCandidate(text){
+  const normalized=String(text||'').replace(/[，]/g,',').replace(/[．]/g,'.').replace(/\s/g,'').replace(/[円¥]/g,'');
+  return safePriceText(normalized);
+ }
+ function numericPnlCandidate(text){
+  const normalized=String(text||'').replace(/[，]/g,',').replace(/[－−―]/g,'-').replace(/[円¥\s]/g,'');
+  return /^-?(?:\d{1,3}(?:,\d{3})+|\d+)$/.test(normalized)&&Number.isSafeInteger(Number(normalized.replace(/,/g,'')))?normalized:'';
+ }
+ async function retryCell(worker,im,base,kind){
+  const isPnl=kind==='pnl';
+  // The first crop is compatible with 0.9.4. Alternate crops widen/shift the
+  // numeric area but still exclude the border and as much of 円 as possible.
+  const variants=isPnl?[
+   [.02,.05,.89,.49,'7'],[.005,.02,.94,.52,'7'],[.02,.08,.87,.40,'6'],[.04,.03,.88,.50,'13'],[.005,.04,.98,.49,'7'],[.0,.0,1,.53,'6']
+  ]:kind==='entry'?[
+   [.12,.50,.75,.47,'7'],[.05,.48,.81,.50,'7'],[.14,.54,.70,.39,'13'],[.02,.48,.82,.50,'6'],[.07,.53,.74,.40,'7'],[.17,.49,.66,.49,'7']
+  ]:[
+   [.12,.06,.75,.44,'7'],[.05,.04,.81,.45,'7'],[.14,.08,.70,.40,'13'],[.02,.03,.82,.47,'6']
+  ];
+  const normalize=isPnl?numericPnlCandidate:numericPriceCandidate;
+  for(const [x,y,w,h,mode] of variants){
+   const result=normalize(await read(worker,im,fractionalCell(base,x,y,w,h),true,mode));
+   if(!result)continue;
+   const n=Number(result.replace(/,/g,''));
+   if(isPnl ? (n<0&&Math.abs(n)>=1000) : (n>0&&n<1000000))return result;
+  }
+  return '';
+ }
  async function readPriceLines(worker,im,rect){
-  const top=fractionalCell(rect,.12,.06,.75,.44);
-  const bottom=fractionalCell(rect,.12,.50,.75,.47);
-  const one=safePriceText(await read(worker,im,top,true,'7'));
-  const two=safePriceText(await read(worker,im,bottom,true,'7'));
-  // Never fill a missing entry price by guessing from the P&L (fees can distort it).
+  const one=await retryCell(worker,im,rect,'current');
+  const two=await retryCell(worker,im,rect,'entry');
   return [one,two].join('\n');
  }
- async function readPnlLine(worker,im,rect){
-  const top=fractionalCell(rect,.02,.05,.89,.49);
-  const result=String(await read(worker,im,top,true,'7')).trim();
-  return /^[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)$/.test(result.replace(/\s/g,''))?result:'';
- }
+ async function readPnlLine(worker,im,rect){return retryCell(worker,im,rect,'pnl');}
  async function parseFile(file,worker,progress){let im=await imageFrom(file);if(im.naturalWidth>=im.naturalHeight)throw Error('SBIの縦長スクリーンショットを選んでください');
    // First identify table type by header. If OCR misses header, inspect first numeric right cell.
    let head=await read(worker,im,SbiRoi.region('header'));
@@ -69,5 +93,5 @@ const SbiImageOcr=(()=>{
    }
    return {name:file.name,view:type,rows,header:head};
  }
- return {parseFile,crop,fractionalCell,safePriceText};
+ return {parseFile,crop,fractionalCell,safePriceText,numericPriceCandidate,numericPnlCandidate,retryCell};
 })();if(typeof module!=='undefined')module.exports=SbiImageOcr;

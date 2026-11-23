@@ -15,10 +15,29 @@ const SbiRoi=(()=>{
  }
  function parseCell(view,left,middle,right){let anchor=identify(left);if(!anchor)return null;let r={...anchor};let mid=tokens(middle),rightNums=tokens(right);
   if(view==='price'){
-   const positives=mid.filter(x=>x.value>0&&x.value<1000000);
-   if(positives.length>=2){r.current=positives[0].value;r.entry=positives[1].value;}
-   else r.warnings=['現在値・建単価は判定不能'];
-   let pn=rightNums.find(x=>x.value<0&&Math.abs(x.value)>=1000);if(pn)r.pnl=pn.value;
+   // readPriceLines returns two separate lines. A failed top line must NOT
+   // cause the correctly recognized lower line to be discarded or shifted.
+   const lines=String(middle??'').replace(/\r/g,'').split('\n');
+   function onePrice(line){
+    const t=toNumeric(line).trim().replace(/[円¥]/g,'').replace(/\s/g,'');
+    if(!/^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,4})?$/.test(t))return undefined;
+    const value=Number(t.replace(/,/g,''));
+    return value>0&&value<1000000?value:undefined;
+   }
+   if(lines.length>=2){
+    r.current=onePrice(lines[0]);r.entry=onePrice(lines[1]);
+   }else{
+    // Legacy paste/OCR text may contain both values on one line.
+    const positives=mid.filter(x=>x.value>0&&x.value<1000000);
+    if(positives.length>=2){r.current=positives[0].value;r.entry=positives[1].value;}
+   }
+   if(r.current===undefined||r.entry===undefined){
+    r.warnings=[`価格欄は${r.current===undefined?'現在値 ':''}${r.entry===undefined?'建単価 ':''}の原画像照合が必要`];
+   }
+   // P&L must include an explicitly observed negative sign. A positive OCR
+   // number without the minus is NOT safe to turn into a negative loss.
+   const pn=rightNums.find(x=>x.value<0&&Math.abs(x.value)>=1000);
+   if(pn)r.pnl=pn.value;
   }else if(view==='quantity'){
    const q=mid.find(x=>Number.isInteger(x.value)&&x.value>=1&&x.value<100000000);
    if(q)r.qty=q.value;
@@ -37,7 +56,7 @@ const SbiRoi=(()=>{
  }
  function cleanCell(text){return String(text||'').replace(/[　\r]/g,' ').trim();}
  function mergeStructured(images){const grouped=new Map();let warnings=[];for(const im of images){for(const row of im.rows||[]){let c=parseCell(im.view,row.left,row.middle,row.right);if(!c){if(row.left.trim())warnings.push(`${im.name||'画像'}: 識別できない銘柄行がありました`);continue;}
-    let key=c.code+'|'+c.kind;if(!grouped.has(key))grouped.set(key,{code:c.code,kind:c.kind,sources:[],conflicts:[],warnings:[]});let p=grouped.get(key);p.sources.push(im.name||'画像');if(c.evidence==='name-correction')p.warnings.push('銘柄名からコードを補正（要確認）');
+    let key=c.code+'|'+c.kind;if(!grouped.has(key))grouped.set(key,{code:c.code,kind:c.kind,sources:[],conflicts:[],warnings:[]});let p=grouped.get(key);p.sources.push(im.name||'画像');if(c.evidence==='name-correction')p.warnings.push('銘柄名からコードを補正（要確認）');if(c.warnings?.length)p.warnings.push(...c.warnings);
     for(const k of ['qty','entry','current','marketValue','pnl'])if(c[k]!==undefined){if(p[k]!==undefined&&p[k]!==c[k]){p.conflicts.push(k);delete p[k];}else if(!p.conflicts.includes(k))p[k]=c[k];}
    }}let positions=[...grouped.values()].map(p=>{
   // A displayed market value and exact share count determine the marked price.
