@@ -7,7 +7,7 @@ const SbiImageOcr=(()=>{
   let pixels=ctx.getImageData(0,0,c.width,c.height);for(let i=0;i<pixels.data.length;i+=4){let r=pixels.data[i],g=pixels.data[i+1],b=pixels.data[i+2];let luminosity=Math.max(r,g,b);let v=luminosity>66?0:255;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=v;}ctx.putImageData(pixels,0,0);return c;
  }
  async function read(worker,im,rect,numeric=false,mode='6'){
-  await worker.setParameters({tessedit_pageseg_mode:mode,tessedit_char_whitelist:numeric?'0123456789,.-()%円株 ':''});
+  await worker.setParameters({tessedit_pageseg_mode:mode,tessedit_char_whitelist:numeric?'0123456789,.-':''});
   let result=await worker.recognize(crop(im,rect));return result.data.text||'';
  }
  // Scan isolated numeric lines instead of assuming two rows are readable in one OCR block.
@@ -24,6 +24,30 @@ const SbiImageOcr=(()=>{
   const options=[first,second,joined];
   return options.sort((a,b)=>SbiRoi.tokens(b).length-SbiRoi.tokens(a).length)[0];
  }
+ // The SBI price column has two lines: current price (top) and average entry (bottom).
+ // The rightmost 円 glyph was repeatedly recognized as an extra digit in actual captures.
+ // Crop out that glyph and recognize each line individually (PSM 7).
+ function fractionalCell(rect, left, top, width, height){
+  return {x:rect.x+rect.w*left,y:rect.y+rect.h*top,w:rect.w*width,h:rect.h*height};
+ }
+ function safePriceText(s){
+  // Reject non-numeric artifacts rather than silently changing a trading price.
+  const t=String(s||'').trim().replace(/[，]/g,',').replace(/[．]/g,'.').replace(/\s/g,'');
+  return /^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,4})?$/.test(t)?t:'';
+ }
+ async function readPriceLines(worker,im,rect){
+  const top=fractionalCell(rect,.12,.06,.75,.44);
+  const bottom=fractionalCell(rect,.12,.50,.75,.47);
+  const one=safePriceText(await read(worker,im,top,true,'7'));
+  const two=safePriceText(await read(worker,im,bottom,true,'7'));
+  // Never fill a missing entry price by guessing from the P&L (fees can distort it).
+  return [one,two].join('\n');
+ }
+ async function readPnlLine(worker,im,rect){
+  const top=fractionalCell(rect,.02,.05,.89,.49);
+  const result=String(await read(worker,im,top,true,'7')).trim();
+  return /^[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)$/.test(result.replace(/\s/g,''))?result:'';
+ }
  async function parseFile(file,worker,progress){let im=await imageFrom(file);if(im.naturalWidth>=im.naturalHeight)throw Error('SBIの縦長スクリーンショットを選んでください');
    // First identify table type by header. If OCR misses header, inspect first numeric right cell.
    let head=await read(worker,im,SbiRoi.region('header'));
@@ -39,11 +63,11 @@ const SbiImageOcr=(()=>{
     if(idx>0&&!left.trim())break;
     if(!left.trim()){if(idx===0)continue;break;}
     if(progress)progress(`${file.name}: ${idx+1}行目を確認中`);
-    let mid=await readNumericCell(worker,im,SbiRoi.region('middle',idx,type),type==='price'?2:1);
-    let right=(idx===0&&type==='quantity'&&right0)?right0:await readNumericCell(worker,im,SbiRoi.region('right',idx,type),1);
+    let mid=type==='price'?await readPriceLines(worker,im,SbiRoi.region('middle',idx,type)):await readNumericCell(worker,im,SbiRoi.region('middle',idx,type),1);
+    let right=type==='price'?await readPnlLine(worker,im,SbiRoi.region('right',idx,type)):(idx===0&&type==='quantity'&&right0)?right0:await readNumericCell(worker,im,SbiRoi.region('right',idx,type),1);
     rows.push({left:SbiRoi.cleanCell(left),middle:SbiRoi.cleanCell(mid),right:SbiRoi.cleanCell(right)});
    }
    return {name:file.name,view:type,rows,header:head};
  }
- return {parseFile,crop};
+ return {parseFile,crop,fractionalCell,safePriceText};
 })();if(typeof module!=='undefined')module.exports=SbiImageOcr;
