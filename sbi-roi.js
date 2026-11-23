@@ -39,6 +39,16 @@ const SbiRoi=(()=>{
  function mergeStructured(images){const grouped=new Map();let warnings=[];for(const im of images){for(const row of im.rows||[]){let c=parseCell(im.view,row.left,row.middle,row.right);if(!c){if(row.left.trim())warnings.push(`${im.name||'画像'}: 識別できない銘柄行がありました`);continue;}
     let key=c.code+'|'+c.kind;if(!grouped.has(key))grouped.set(key,{code:c.code,kind:c.kind,sources:[],conflicts:[],warnings:[]});let p=grouped.get(key);p.sources.push(im.name||'画像');if(c.evidence==='name-correction')p.warnings.push('銘柄名からコードを補正（要確認）');
     for(const k of ['qty','entry','current','marketValue','pnl'])if(c[k]!==undefined){if(p[k]!==undefined&&p[k]!==c[k]){p.conflicts.push(k);delete p[k];}else if(!p.conflicts.includes(k))p[k]=c[k];}
-   }}let positions=[...grouped.values()].map(p=>{if(p.qty&&p.current&&p.marketValue&&Math.abs(p.qty*p.current-p.marketValue)>Math.max(2,p.marketValue*.002))p.conflicts.push('評価額');p.conflicts=[...new Set(p.conflicts)];p.warnings=[...new Set(p.warnings)];return p;});return {positions,warnings};}
+   }}let positions=[...grouped.values()].map(p=>{
+  // A displayed market value and exact share count determine the marked price.
+  // Keep it visibly flagged as calculated, never claim OCR recognized the price.
+  if(p.qty>0 && p.marketValue>0 && p.current===undefined && !p.conflicts.includes('current')){
+   const inferred=p.marketValue/p.qty;
+   if(Number.isFinite(inferred)&&inferred>0&&inferred<1000000){
+    p.current=Math.round(inferred*10000)/10000;
+    p.warnings.push('現在値はOCRではなく評価額÷株数で算出（要確認）');
+   }
+  }
+  if(p.qty&&p.current&&p.marketValue&&Math.abs(p.qty*p.current-p.marketValue)>Math.max(2,p.marketValue*.002))p.conflicts.push('評価額');p.conflicts=[...new Set(p.conflicts)];p.warnings=[...new Set(p.warnings)];return p;});return {positions,warnings};}
  return {tokens,identify,parseCell,detectView,region,mergeStructured,cleanCell};
 })();if(typeof module!=='undefined')module.exports=SbiRoi;

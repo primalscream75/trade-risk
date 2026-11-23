@@ -6,9 +6,23 @@ const SbiImageOcr=(()=>{
   // Dark SBI theme: convert colored text (green/white) to black text on white.
   let pixels=ctx.getImageData(0,0,c.width,c.height);for(let i=0;i<pixels.data.length;i+=4){let r=pixels.data[i],g=pixels.data[i+1],b=pixels.data[i+2];let luminosity=Math.max(r,g,b);let v=luminosity>66?0:255;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=v;}ctx.putImageData(pixels,0,0);return c;
  }
- async function read(worker,im,rect,numeric=false){
-  await worker.setParameters({tessedit_pageseg_mode:'6',tessedit_char_whitelist:numeric?'0123456789,.-()%円株 ':''});
+ async function read(worker,im,rect,numeric=false,mode='6'){
+  await worker.setParameters({tessedit_pageseg_mode:mode,tessedit_char_whitelist:numeric?'0123456789,.-()%円株 ':''});
   let result=await worker.recognize(crop(im,rect));return result.data.text||'';
+ }
+ // Scan isolated numeric lines instead of assuming two rows are readable in one OCR block.
+ // Use a second, larger unbinarized crop if the first attempt has insufficient numeric tokens.
+ async function readNumericCell(worker,im,rect,minCount=1){
+  const first=await read(worker,im,rect,true,'6');
+  if(SbiRoi.tokens(first).length>=minCount)return first;
+  const second=await read(worker,im,rect,false,'6');
+  if(SbiRoi.tokens(second).length>=minCount)return second;
+  const h=rect.h*.53;
+  const a=await read(worker,im,{...rect,h},true,'7');
+  const b=await read(worker,im,{...rect,y:rect.y+rect.h*.45,h},true,'7');
+  const joined=a+'\n'+b;
+  const options=[first,second,joined];
+  return options.sort((a,b)=>SbiRoi.tokens(b).length-SbiRoi.tokens(a).length)[0];
  }
  async function parseFile(file,worker,progress){let im=await imageFrom(file);if(im.naturalWidth>=im.naturalHeight)throw Error('SBIの縦長スクリーンショットを選んでください');
    // First identify table type by header. If OCR misses header, inspect first numeric right cell.
@@ -25,8 +39,8 @@ const SbiImageOcr=(()=>{
     if(idx>0&&!left.trim())break;
     if(!left.trim()){if(idx===0)continue;break;}
     if(progress)progress(`${file.name}: ${idx+1}行目を確認中`);
-    let mid=await read(worker,im,SbiRoi.region('middle',idx,type),true);
-    let right=(idx===0&&type==='quantity'&&right0)?right0:await read(worker,im,SbiRoi.region('right',idx,type),true);
+    let mid=await readNumericCell(worker,im,SbiRoi.region('middle',idx,type),type==='price'?2:1);
+    let right=(idx===0&&type==='quantity'&&right0)?right0:await readNumericCell(worker,im,SbiRoi.region('right',idx,type),1);
     rows.push({left:SbiRoi.cleanCell(left),middle:SbiRoi.cleanCell(mid),right:SbiRoi.cleanCell(right)});
    }
    return {name:file.name,view:type,rows,header:head};
