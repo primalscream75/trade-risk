@@ -1,0 +1,10 @@
+'use strict';
+const assert=require('node:assert/strict'),B=require('./backup-core');
+const p={accounts:[{id:'a',name:'サンプル',equity:1000000}],positions:[{id:'p',account:'a',kind:'long',code:'5803',entry:3000,current:2900,qty:100}]};
+let doc=B.make(p,{assets:'1000000',risk:'0.5'}),result=B.check(JSON.parse(JSON.stringify(doc)));
+assert.deepEqual(result,{accounts:1,positions:1});
+assert.throws(()=>B.check({...doc,version:2}));
+assert.throws(()=>B.check({...doc,portfolio:{...p,positions:[{...p.positions[0],account:'unknown'}]}}));
+assert.throws(()=>B.check({...doc,portfolio:{...p,positions:[{...p.positions[0],qty:-2}]}}));
+assert.throws(()=>B.check({...doc,portfolio:{...p,accounts:[p.accounts[0],p.accounts[0]]}}));
+console.log('BackupCore: 5 assertions PASS');

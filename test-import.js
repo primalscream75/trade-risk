@@ -1,0 +1,11 @@
+'use strict';const assert=require('node:assert/strict');const C=require('./import-core');
+assert.deepEqual(C.parseCodes('銘柄A 5803 買建\n銘柄B 581A 買建\n5803'),['5803','581A']);
+assert.equal(C.numeric('-1,234,567円'),-1234567);
+const m=C.parseMargin('委託保証金現金 1,000,000円\n代用有価証券評価額合計 2,000,000円\n実質保証金(A) 1,500,000円\n建代金合計(B) 5,000,000円\n委託保証金率(A/B)×100 30.00%');
+assert.equal(m.cash,1000000);assert.equal(m.effective,1500000);assert.equal(m.principal,5000000);assert.equal(m.collateral,2000000);assert.equal(m.rate,30);
+assert.deepEqual(C.reconcileMargin(m),[]);
+assert.deepEqual(C.validatePosition({code:'581A',kind:'long',qty:100,entry:3000,current:2800}),[]);
+assert.ok(C.validatePosition({code:'581A',kind:'long',qty:0,entry:3000,current:2800}).includes('株数'));
+assert.deepEqual(C.reconcile({kind:'long',qty:100,entry:3000,current:2800,marketValue:280000,pnl:-20000}),[]);
+assert.ok(C.reconcile({kind:'long',qty:100,entry:3000,current:2800,marketValue:999,pnl:''}).length>0);
+console.log('ImportCore: 9 assertions PASS');
