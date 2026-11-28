@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('node:assert/strict'),R=require('./dashboard-core'),Q=require('./readiness-core');
+let count=0;const check=(condition,msg)=>{assert.ok(condition,msg);count++;};
+const now=Date.now(), stamp=new Date(now).toISOString(), old=new Date(now-2*86400000).toISOString();
+const account=(id)=>({id,name:id,equity:1e7,limit:2,themeLimit:1,margin:{principal:5e6,effective:2e6,collateral:5e5,threshold:20},marginUpdatedAt:stamp});
+const position=(account,id='p')=>({id,account,code:'5803',kind:'long',name:'sample',entry:5000,current:5200,stop:4800,qty:1000,theme:'AI',updatedAt:stamp});
+const a=account('a'),p=position('a');
+let z=R.calculate([a],[p],10,10);
+check(z.totalGross===5200000,'total gross');check(z.totalUnrealized===200000,'pnl');check(z.totalRisk===400000,'risk');check(z.totalStopPnl===-200000,'stop pnl');check(z.totalStress===520000,'stress');check(z.totalCreditStress===520000,'credit stress');check(z.byAccount[0].margin.valid===false,'unverified no margin');check(Q.audit([a],[p],now).accounts[0].messages.some(x=>x.includes('照合')),'audit unverified');
+a.reconciledAt=stamp;z=R.calculate([a],[p],10,10);check(z.byAccount[0].margin.valid===true,'verified margin');check(Math.abs(z.byAccount[0].margin.after-28.6)<1e-9,'stressed margin');check(z.byAccount[0].margin.buffer===1000000,'margin buffer');
+p.updatedAt=new Date(now+1000).toISOString();z=R.calculate([a],[p],10,10);check(!z.byAccount[0].margin.valid,'edit invalidates');p.updatedAt=stamp;
+a.marginUpdatedAt=old;z=R.calculate([a],[p],10,10);check(!z.byAccount[0].margin.valid,'stale margin');a.marginUpdatedAt=stamp;
+a.margin.principal=5400000;z=R.calculate([a],[p],10,10);check(!z.byAccount[0].margin.valid,'principal mismatch');a.margin.principal=5000000;
+const b=account('b');b.reconciledAt=stamp;const short={...position('b','s'),kind:'short',entry:5400,current:5200,stop:5500};z=R.calculate([a,b],[p,short],10,10);check(z.positionCount===2,'multi accounts');check(z.totalUnrealized===400000,'mixed pnl');check(z.totalRisk===700000,'mixed risk');
+check(Q.audit([account('c')],[],now).accounts[0].messages.some(x=>x.includes('未登録')),'empty not safe');
+check(Q.audit([a],[{...p,stop:0}],now).accounts[0].messages.some(x=>x.includes('損切り')),'missing stop');
+console.log(`PASS ${count} regression assertions`);
