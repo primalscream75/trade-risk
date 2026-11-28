@@ -1,0 +1,16 @@
+'use strict';
+const assert=require('node:assert/strict'),L=require('./lot-core');let count=0;
+const t=(x,msg)=>{assert.ok(x,msg);count++};
+const sample=(account='a',code='5803',lotKey='')=>({account,code,kind:'long',lotKey,entry:5000,current:5200,qty:1000});
+let p=L.plan([], [sample()]);t(p.operations.length===1&&p.operations[0].type==='insert','initial insert');
+p=L.plan([{...sample(),id:'x'}],[sample()]);t(p.operations[0]?.type==='update','single aggregate update');
+p=L.plan([{...sample('a','5803','2026-11-23-A'),id:'x'}],[sample()]);t(p.operations.length===0&&p.issues.length===1,'aggregate cannot overwrite lot');
+p=L.plan([{...sample(),id:'x'}],[sample('a','5803','2026-11-23-A')]);t(p.operations.length===0&&p.issues.length===1,'lot cannot duplicate aggregate');
+p=L.plan([{...sample('a','5803','A'),id:'x'}],[sample('a','5803','A')]);t(p.operations[0]?.type==='update','match lot');
+p=L.plan([{...sample('a','5803','A'),id:'x'}],[sample('a','5803','B')]);t(p.operations[0]?.type==='insert','new distinct lot');
+p=L.plan([],[sample(),sample()]);t(p.operations.length===1&&p.issues.length===1,'batch duplicate blocked');
+p=L.plan([{...sample('a'),id:'x'}],[sample('b')]);t(p.operations[0]?.type==='insert','account isolation');
+p=L.plan([{...sample('a','5803','A'),id:'x'}, {...sample('a','5803','B'),id:'y'}],[sample('a','5803','C')]);t(p.operations[0]?.type==='insert','third distinct lot');
+p=L.plan([{...sample('a','5803','A'),id:'x'},{...sample('a','5803','B'),id:'y'}],[sample('a','5803')]);t(p.operations.length===0&&p.issues.length===1,'anonymous not overwrite multi');
+t(L.code({name:'フジクラ [5803]'})==='5803','legacy name extraction');
+console.log('PASS '+count+' lot-safe import checks');
